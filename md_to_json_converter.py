@@ -19,8 +19,54 @@ class Article:
     """Représente un article d'un texte de loi"""
     numero: str
     contenu: str
+    intitule: Optional[str] = None  # Titre de l'article si présent
+
+
+@dataclass
+class Section:
+    """Représente une section dans un chapitre"""
+    numero: Optional[str]  # "I", "II", "Section 1"
+    titre: str
+    articles: List[Article] = None
+    contenu_libre: Optional[str] = None  # Texte avant les articles
     
+    def __post_init__(self):
+        if self.articles is None:
+            self.articles = []
+
+
+@dataclass
+class Chapitre:
+    """Représente un chapitre dans un titre"""
+    numero: Optional[str]  # "1", "2", "Chapitre premier"
+    titre: str
+    articles: List[Article] = None
+    sections: List[Section] = None
+    contenu_libre: Optional[str] = None
     
+    def __post_init__(self):
+        if self.articles is None:
+            self.articles = []
+        if self.sections is None:
+            self.sections = []
+
+
+@dataclass
+class Titre:
+    """Représente un titre dans une loi (TITRE I, TITRE II, etc.)"""
+    numero: Optional[str]  # "I", "II", "III"
+    intitule: str  # Ex: "DISPOSITIONS GENERALES"
+    chapitres: List[Chapitre] = None
+    articles: List[Article] = None  # Articles directs sans chapitre
+    contenu_libre: Optional[str] = None  # Texte d'introduction
+    
+    def __post_init__(self):
+        if self.chapitres is None:
+            self.chapitres = []
+        if self.articles is None:
+            self.articles = []
+
+
 @dataclass
 class Signataire:
     """Représente un signataire d'un texte"""
@@ -34,30 +80,54 @@ class Reference:
     """Représente une référence à un autre texte"""
     type_texte: str  # "Vu", "Conformément à", etc.
     reference: str
+
+
+@dataclass
+class Structure:
+    """Structure hiérarchique complète d'un texte légal"""
+    titres: List[Titre] = None
+    chapitres: List[Chapitre] = None  # Si pas de titres
+    sections: List[Section] = None  # Si pas de chapitres
+    articles: List[Article] = None  # Articles directs
+    
+    def __post_init__(self):
+        if self.titres is None:
+            self.titres = []
+        if self.chapitres is None:
+            self.chapitres = []
+        if self.sections is None:
+            self.sections = []
+        if self.articles is None:
+            self.articles = []
     
 
 @dataclass
 class TexteLegal:
     """Représente un texte légal (loi, décret, arrêté, etc.)"""
     id: str  # Identifiant unique généré
-    type_texte: str  # LOI, DECRET, ARRETE, CONVENTION, etc.
+    type_texte: str  # LOI, DECRET, ARRETE, etc.
     numero: Optional[str] = None
     date: Optional[str] = None
     titre: str = ""
-    contenu: str = ""
-    articles: List[Article] = None
+    preambule: Optional[str] = None  # "L'Assemblée nationale...", "Le Président promulgue..."
+    structure: Optional[Structure] = None  # Structure hiérarchique
     references: List[Reference] = None
     signataires: List[Signataire] = None
-    preambule: Optional[str] = None
     page_debut: Optional[int] = None
     
+    # Champs legacy pour compatibilité
+    contenu: str = ""  # Sera deprecated
+    articles: List[Article] = None  # Liste plate pour compatibilité
+    
     def __post_init__(self):
-        if self.articles is None:
-            self.articles = []
+        if self.structure is None:
+            self.structure = Structure()
         if self.references is None:
             self.references = []
         if self.signataires is None:
             self.signataires = []
+        if self.articles is None:
+            self.articles = []
 
 
 @dataclass
@@ -279,23 +349,157 @@ class MarkdownToJsonConverter:
         
         return signataires
     
+    def find_sommaire_boundaries(self, content: str) -> tuple[int, int]:
+        """
+        Trouve les limites du sommaire de manière intelligente.
+        
+        Stratégie:
+        1. Chercher le début explicite (# SOMMAIRE)
+        2. Identifier les sections listées dans le sommaire
+        3. Détecter la fin du sommaire quand:
+           - Les mêmes sections réapparaissent avec du contenu complet
+           - On trouve un texte de loi complet (avec articles, promulgation, etc.)
+        
+        Returns:
+            tuple: (index_debut, index_fin) en nombre de lignes
+        """
+        lines = content.split('\n')
+        sommaire_start = None
+        sommaire_end = None
+        
+        # Pattern pour détecter les entrées du sommaire avec numéro de page
+        # Ex: "28 mai Loi n° 10-2025... 759"
+        page_number_pattern = re.compile(r'.*\s+\d{3,4}\s*$')
+        
+        # Étape 1: Trouver le début du sommaire
+        for i, line in enumerate(lines):
+            if re.match(r'^#\s*SOMMAIRE\s*$', line.strip(), re.IGNORECASE):
+                sommaire_start = i
+                break
+        
+        if sommaire_start is None:
+            # Pas de sommaire explicite, chercher un pattern de table des matières
+            for i, line in enumerate(lines[:100]):  # Chercher dans les 100 premières lignes
+                if 'table des matières' in line.lower():
+                    sommaire_start = i
+                    break
+        
+        if sommaire_start is None:
+            # Pas de sommaire trouvé, le contenu commence au début
+            return (0, 0)
+        
+        # Étape 2: Identifier les sections du sommaire
+        # Ces sections seront répétées quand le contenu réel commence
+        sommaire_sections = []
+        in_sommaire = True
+        
+        for i in range(sommaire_start + 1, min(sommaire_start + 200, len(lines))):
+            line = lines[i].strip()
+            
+            # Sections principales dans le sommaire (# PARTIE OFFICIELLE, # - LOIS -, etc.)
+            if line.startswith('#') and not line.startswith('##'):
+                section_title = line[1:].strip()
+                sommaire_sections.append({
+                    'title': section_title,
+                    'line': i,
+                    'seen_again': False
+                })
+        
+        # Étape 3: Détecter la fin du sommaire
+        # Le sommaire se termine quand on voit les mêmes sections réapparaitre
+        # mais cette fois avec du contenu réel (pas juste des références)
+        
+        section_repetitions = {}  # Compte combien de fois chaque section apparait
+        
+        for i in range(sommaire_start + 1, len(lines)):
+            line = lines[i].strip()
+            
+            # Vérifier si c'est une section titre
+            if line.startswith('#') and not line.startswith('##'):
+                section_title = line[1:].strip()
+                
+                # Compter les répétitions
+                if section_title not in section_repetitions:
+                    section_repetitions[section_title] = []
+                section_repetitions[section_title].append(i)
+            
+            # Critère 1: Si on voit une section répétée au moins 2 fois
+            # et qu'on dépasse la zone probable du sommaire
+            if i > sommaire_start + 15:  # Au moins 15 lignes après "SOMMAIRE"
+                for section_title, occurrences in section_repetitions.items():
+                    if len(occurrences) >= 2:
+                        # La deuxième occurrence est probablement le début du contenu réel
+                        # Vérifier qu'elle est suffisamment loin de la première
+                        if occurrences[1] - occurrences[0] > 5:
+                            # Vérifier que dans les lignes suivantes il y a du contenu réel
+                            # (pas juste des numéros de page)
+                            has_real_content = False
+                            for j in range(occurrences[1] + 1, min(occurrences[1] + 20, len(lines))):
+                                check_line = lines[j].strip()
+                                # Contenu réel = lignes longues sans numéro de page à la fin
+                                if len(check_line) > 50 and not page_number_pattern.match(check_line):
+                                    has_real_content = True
+                                    break
+                            
+                            if has_real_content:
+                                sommaire_end = occurrences[1]
+                                break
+                
+                if sommaire_end:
+                    break
+            
+            # Critère 2: Texte de loi complet détecté
+            # Un texte avec "L'Assemblée" ou "promulgue la loi" = contenu réel
+            if i > sommaire_start + 20:
+                if any(marker in line.lower() for marker in [
+                    "l'assemblée nationale",
+                    "promulgue la loi",
+                    "le président de la république promulgue",
+                    "article premier :",
+                    "vu la constitution"
+                ]):
+                    # Remonter pour trouver le titre de ce texte
+                    for j in range(i - 1, max(sommaire_start, i - 10), -1):
+                        if lines[j].startswith('#'):
+                            sommaire_end = j
+                            break
+                    break
+        
+        # Si on n'a pas trouvé de fin claire, chercher la dernière ligne avec numéro de page
+        if sommaire_end is None:
+            last_page_number_line = sommaire_start
+            for i in range(sommaire_start + 1, min(sommaire_start + 150, len(lines))):
+                if page_number_pattern.match(lines[i].strip()):
+                    last_page_number_line = i
+            
+            # Le sommaire se termine quelques lignes après la dernière référence de page
+            sommaire_end = last_page_number_line + 2
+        
+        return (sommaire_start, sommaire_end)
+    
     def split_into_sections(self, content: str) -> List[tuple[str, str]]:
-        """Découpe le contenu en sections basées sur les titres de niveau 1 (#)"""
+        """Découpe le contenu en sections basées sur les titres de niveau 1 (#), en ignorant le sommaire"""
+        
+        # Trouver les limites du sommaire
+        sommaire_start, sommaire_end = self.find_sommaire_boundaries(content)
+        
+        lines = content.split('\n')
+        
+        # Ne traiter que le contenu après le sommaire
+        relevant_lines = lines[sommaire_end:] if sommaire_end > 0 else lines
+        
         sections = []
         current_title = ""
         current_content = []
         
-        lines = content.split('\n')
-        
-        for line in lines:
+        for line in relevant_lines:
             # Vérifier si c'est un titre de niveau 1
             if line.startswith('# ') and not line.startswith('##'):
                 # Sauvegarder la section précédente
-                if current_title or current_content:
-                    sections.append((
-                        current_title,
-                        '\n'.join(current_content).strip()
-                    ))
+                if current_title and current_content:
+                    section_content = '\n'.join(current_content).strip()
+                    if section_content:  # Seulement si non vide
+                        sections.append((current_title, section_content))
                 
                 # Démarrer nouvelle section
                 current_title = line[2:].strip()
@@ -304,25 +508,210 @@ class MarkdownToJsonConverter:
                 current_content.append(line)
         
         # Ajouter la dernière section
-        if current_title or current_content:
-            sections.append((
-                current_title,
-                '\n'.join(current_content).strip()
-            ))
+        if current_title and current_content:
+            section_content = '\n'.join(current_content).strip()
+            if section_content:
+                sections.append((current_title, section_content))
         
         return sections
     
+    def clean_content(self, content: str) -> str:
+        """
+        Nettoie le contenu textuel pour le stockage.
+        Supprime les marqueurs Markdown excessifs et normalise les espaces.
+        """
+        # Supprimer les titres Markdown (# Titre) qui sont déjà dans la structure
+        # Mais on garde le texte, juste on enlève le balisage #
+        cleaned = re.sub(r'^#+\s*', '', content, flags=re.MULTILINE)
+        
+        # Remplacer les sauts de ligne multiples par un double saut de ligne
+        cleaned = re.sub(r'\n{3,}', '\n\n', cleaned)
+        
+        # Supprimer les espaces en début/fin de ligne
+        cleaned = '\n'.join(line.strip() for line in cleaned.split('\n'))
+        
+        # Supprimer les césures de mots en fin de ligne (ex: "program-\nmation")
+        # Attention: peut être risqué si le mot est vraiment composé, mais souvent utile pour l'OCR
+        cleaned = re.sub(r'(\w)-\n(\w)', r'\1\2', cleaned)
+        
+        return cleaned.strip()
+
+    def extract_preambule(self, content: str) -> Optional[str]:
+        """
+        Extrait le préambule d'un texte de loi.
+        """
+        # Chercher le début du texte jusqu'au premier TITRE ou Article
+        lines = content.split('\n')
+        preambule_lines = []
+        
+        for line in lines:
+            if re.match(r'^#?\s*(?:TITRE|Chapitre|Section|Article|Art\.)', line.strip(), re.IGNORECASE):
+                break
+            if line.strip():
+                preambule_lines.append(line.strip())
+        
+        # Si on a trouvé quelque chose et que ce n'est pas tout le texte
+        if preambule_lines and len(preambule_lines) < len(lines):
+            return ' '.join(preambule_lines)
+        
+        return None
+
+    def parse_hierarchical_structure(self, content: str) -> Structure:
+        """
+        Parse le contenu pour extraire la structure hiérarchique complète.
+        Gère: TITRE > Chapitre > Section > Article
+        """
+        lines = content.split('\n')
+        structure = Structure()
+        
+        current_titre = None
+        current_chapitre = None
+        current_section = None
+        current_article = None
+        current_article_content = []
+        
+        # Fonction helper interne pour sauvegarder l'article en cours
+        def save_current_article():
+            nonlocal current_article, current_article_content
+            if current_article:
+                current_article.contenu = '\n'.join(current_article_content).strip()
+                # Nettoyer le contenu de l'article
+                current_article.contenu = self.clean_content(current_article.contenu)
+                
+                if current_section:
+                    current_section.articles.append(current_article)
+                elif current_chapitre:
+                    current_chapitre.articles.append(current_article)
+                elif current_titre:
+                    current_titre.articles.append(current_article)
+                else:
+                    structure.articles.append(current_article)
+                
+                current_article = None
+                current_article_content = []
+
+        for line in lines:
+            line_stripped = line.strip()
+            if not line_stripped:
+                if current_article:
+                    current_article_content.append("")
+                continue
+
+            # Détecter TITRE
+            titre_match = re.match(r'^#?\s*TITRE\s+([IVX]+|\d+)(?:\s*[:：]\s*(.+))?$', line_stripped, re.IGNORECASE)
+            if titre_match:
+                save_current_article()
+                
+                # Sauvegarder les éléments précédents dans la hiérarchie
+                if current_section:
+                    if current_chapitre: current_chapitre.sections.append(current_section)
+                    else: structure.sections.append(current_section)
+                    current_section = None
+                
+                if current_chapitre:
+                    if current_titre: current_titre.chapitres.append(current_chapitre)
+                    else: structure.chapitres.append(current_chapitre)
+                    current_chapitre = None
+                
+                if current_titre:
+                    structure.titres.append(current_titre)
+                
+                numero = titre_match.group(1)
+                intitule = titre_match.group(2).strip() if titre_match.group(2) else ""
+                current_titre = Titre(numero=numero, intitule=intitule)
+                continue
+
+            # Détecter CHAPITRE
+            chapitre_match = re.match(r'^#?\s*Chapitre\s+([IVX]+|\d+|premier|un)(?:\s*[:：]\s*(.+))?$', line_stripped, re.IGNORECASE)
+            if chapitre_match:
+                save_current_article()
+                
+                if current_section:
+                    if current_chapitre: current_chapitre.sections.append(current_section)
+                    else: structure.sections.append(current_section)
+                    current_section = None
+                
+                if current_chapitre:
+                    if current_titre: current_titre.chapitres.append(current_chapitre)
+                    else: structure.chapitres.append(current_chapitre)
+                
+                numero = chapitre_match.group(1)
+                titre = chapitre_match.group(2).strip() if chapitre_match.group(2) else ""
+                current_chapitre = Chapitre(numero=numero, titre=titre)
+                continue
+
+            # Détecter SECTION
+            section_match = re.match(r'^#?\s*(?:Section|SECTION)\s+([IVX]+|\d+)(?:\s*[:：]\s*(.+))?$', line_stripped, re.IGNORECASE)
+            if section_match:
+                save_current_article()
+                
+                if current_section:
+                    if current_chapitre: current_chapitre.sections.append(current_section)
+                    else: structure.sections.append(current_section)
+                
+                numero = section_match.group(1)
+                titre = section_match.group(2).strip() if section_match.group(2) else ""
+                current_section = Section(numero=numero, titre=titre)
+                continue
+
+            # Détecter ARTICLE
+            article_match = re.match(r'^(?:Article|Art\.|ART\.)\s+(\d+(?:er|ème|°|re)?|premier|un)\s*[.：:]?\s*(?:[-–—]\s*)?(.*)$', line_stripped, re.IGNORECASE)
+            if article_match:
+                save_current_article()
+                
+                numero = article_match.group(1)
+                contenu_start = article_match.group(2).strip()
+                current_article = Article(numero=numero, contenu="")
+                current_article_content = [contenu_start] if contenu_start else []
+                continue
+
+            # Contenu de l'article ou contenu libre
+            if current_article:
+                current_article_content.append(line)
+        
+        # Sauvegarder le dernier article et fermer la structure
+        save_current_article()
+        
+        if current_section:
+            if current_chapitre: current_chapitre.sections.append(current_section)
+            else: structure.sections.append(current_section)
+        
+        if current_chapitre:
+            if current_titre: current_titre.chapitres.append(current_chapitre)
+            else: structure.chapitres.append(current_chapitre)
+        
+        if current_titre:
+            structure.titres.append(current_titre)
+            
+        return structure
+
     def parse_texte(self, title: str, content: str, publication_id: str, index: int) -> Optional[TexteLegal]:
         """Parse une section en TexteLegal"""
         type_texte = self.detect_texte_type(title + '\n' + content[:500])
         
-        if not type_texte:
+        # Ignorer les sections qui sont des sous-parties
+        if title.strip().startswith(('TITRE ', 'Chapitre ', 'Section ', 'Sous-section',
+                                     'A - ', 'B - ', 'C - ', 'Pilier ', 'ARTICLE ')):
+            return None
+        
+        # Ignorer les sections vides
+        if not type_texte or not content.strip():
             return None
         
         numero, date = self.extract_numero_date(title + '\n' + content[:300], type_texte)
-        articles = self.extract_articles(content)
+        
+        # Extraction de la structure hiérarchique
+        structure = self.parse_hierarchical_structure(content)
+        
+        # Extraction du préambule
+        preambule = self.extract_preambule(content)
+        
+        # Extraction des métadonnées
         references = self.extract_references(content)
         signataires = self.extract_signataires(content)
+        
+        # Nettoyage du contenu global pour le stockage
+        cleaned_content = self.clean_content(content)
         
         # Générer un ID unique
         if numero:
@@ -330,17 +719,95 @@ class MarkdownToJsonConverter:
         else:
             texte_id = f"{publication_id}-{type_texte.lower()}-{index}"
         
+        # Pour la compatibilité, on garde aussi une liste plate d'articles
+        # On récupère tous les articles de la structure
+        flat_articles = []
+        flat_articles.extend(structure.articles)
+        for titre in structure.titres:
+            flat_articles.extend(titre.articles)
+            for chap in titre.chapitres:
+                flat_articles.extend(chap.articles)
+                for sec in chap.sections:
+                    flat_articles.extend(sec.articles)
+        for chap in structure.chapitres:
+            flat_articles.extend(chap.articles)
+            for sec in chap.sections:
+                flat_articles.extend(sec.articles)
+        for sec in structure.sections:
+            flat_articles.extend(sec.articles)
+            
         return TexteLegal(
             id=texte_id,
             type_texte=type_texte,
             numero=numero,
             date=date,
             titre=title,
-            contenu=content,
-            articles=articles,
+            contenu=cleaned_content,
+            preambule=preambule,
+            structure=structure,
+            articles=flat_articles,
             references=references,
             signataires=signataires
         )
+    
+    def merge_related_sections(self, sections: List[tuple[str, str]]) -> List[tuple[str, str]]:
+        """Fusionne les sections qui appartiennent au même texte légal"""
+        if not sections:
+            return []
+        
+        merged = []
+        current_main_section = None
+        accumulated_content = []
+        
+        for title, content in sections:
+            # Vérifier si c'est une section principale (nouveau texte)
+            is_main_section = False
+            title_upper = title.upper()
+            
+            # Patterns de sections principales
+            if re.search(r'LOI\s+(?:N°|n°|No)\s*[\d/-]+', title, re.IGNORECASE):
+                is_main_section = True
+            elif re.search(r'DECRET\s+(?:N°|n°|No)\s*[\d/-]+', title, re.IGNORECASE):
+                is_main_section = True
+            elif re.search(r'ARRETE\s+(?:N°|n°|No)\s*[\d/-]+', title, re.IGNORECASE):
+                is_main_section = True
+            elif any(keyword in title_upper for keyword in ['ACCORD DE', 'CONVENTION', 'PROTOCOLE']):
+                is_main_section = True
+            elif title_upper.startswith('- LOIS -') or title_upper.startswith('- DECRETS'):
+                is_main_section = True
+            
+            # Si c'est un titre/chapitre/section (sous-partie)
+            is_subsection = title.strip().startswith((
+                'TITRE ', 'Chapitre ', 'Section ', 'Sous-section',
+                'A - ', 'B - ', 'C - ', 'Pilier ', 'Article '
+            ))
+            
+            if is_main_section and not is_subsection:
+                # Sauvegarder la section précédente
+                if current_main_section:
+                    merged_content = '\n\n'.join(accumulated_content).strip()
+                    merged.append((current_main_section, merged_content))
+                
+                # Démarrer une nouvelle section principale
+                current_main_section = title
+                accumulated_content = [content]
+            elif current_main_section:
+                # Ajouter à la section en cours
+                # Ajouter le titre de la sous-section comme marqueur
+                accumulated_content.append(f"# {title}\n\n{content}")
+            else:
+                # Pas encore de section principale, ignorer ou traiter séparément
+                # C'est probablement du contenu introductif
+                if content.strip():
+                    merged.append((title, content))
+        
+        # Ajouter la dernière section
+        if current_main_section:
+            merged_content = '\n\n'.join(accumulated_content).strip()
+            merged.append((current_main_section, merged_content))
+        
+        return merged
+
     
     def convert_file(self, md_file: Path) -> Dict[str, Any]:
         """Convertit un fichier MD en structure JSON"""
@@ -354,11 +821,14 @@ class MarkdownToJsonConverter:
         pub_info = self.extract_publication_info(md_file.name, content)
         publication = Publication(**pub_info)
         
-        # Découper en sections
+        # Découper en sections (en ignorant le sommaire)
         sections = self.split_into_sections(content)
         
-        # Parser chaque section
-        for index, (title, section_content) in enumerate(sections):
+        # Fusionner les sections connexes (chapitres avec leur loi parent, etc.)
+        merged_sections = self.merge_related_sections(sections)
+        
+        # Parser chaque section fusionnée
+        for index, (title, section_content) in enumerate(merged_sections):
             if not title or not section_content:
                 continue
             
@@ -372,6 +842,49 @@ class MarkdownToJsonConverter:
     
     def to_json_dict(self, publication: Publication) -> Dict[str, Any]:
         """Convertit une Publication en dictionnaire JSON serializable"""
+        
+        def article_to_dict(art):
+            return {
+                'numero': art.numero,
+                'contenu': art.contenu,
+                'intitule': art.intitule
+            }
+            
+        def section_to_dict(sec):
+            return {
+                'numero': sec.numero,
+                'titre': sec.titre,
+                'articles': [article_to_dict(a) for a in sec.articles],
+                'contenu_libre': sec.contenu_libre
+            }
+            
+        def chapitre_to_dict(chap):
+            return {
+                'numero': chap.numero,
+                'titre': chap.titre,
+                'articles': [article_to_dict(a) for a in chap.articles],
+                'sections': [section_to_dict(s) for s in chap.sections],
+                'contenu_libre': chap.contenu_libre
+            }
+            
+        def titre_to_dict(titre):
+            return {
+                'numero': titre.numero,
+                'intitule': titre.intitule,
+                'chapitres': [chapitre_to_dict(c) for c in titre.chapitres],
+                'articles': [article_to_dict(a) for a in titre.articles],
+                'contenu_libre': titre.contenu_libre
+            }
+            
+        def structure_to_dict(struct):
+            if not struct: return None
+            return {
+                'titres': [titre_to_dict(t) for t in struct.titres],
+                'chapitres': [chapitre_to_dict(c) for c in struct.chapitres],
+                'sections': [section_to_dict(s) for s in struct.sections],
+                'articles': [article_to_dict(a) for a in struct.articles]
+            }
+
         result = {
             'id': publication.id,
             'numero_parution': publication.numero_parution,
@@ -389,10 +902,9 @@ class MarkdownToJsonConverter:
                 'date': texte.date,
                 'titre': texte.titre,
                 'contenu': texte.contenu,
-                'articles': [
-                    {'numero': art.numero, 'contenu': art.contenu}
-                    for art in texte.articles
-                ],
+                'preambule': texte.preambule,
+                'structure': structure_to_dict(texte.structure),
+                'articles': [article_to_dict(art) for art in texte.articles], # Legacy flat list
                 'references': [
                     {'type_texte': ref.type_texte, 'reference': ref.reference}
                     for ref in texte.references
