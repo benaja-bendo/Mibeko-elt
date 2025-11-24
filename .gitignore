@@ -1,1 +1,4 @@
-data
+data/*
+!data/raw/congo-jo-2025-26.md
+!data/processed/congo-jo-2025-26.md
+!data/json/congo-jo-2025-26.json
