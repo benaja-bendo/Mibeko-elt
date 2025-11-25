@@ -1,0 +1,89 @@
+{
+  "type": "object",
+  "title": "DocumentJournalOfficiel",
+  "properties": {
+    "numero_texte": {
+      "type": "string",
+      "description": "Numéro d'identification du texte (ex: Loi n° 2025-156)"
+    },
+    "date_publication": {
+      "type": "string",
+      "format": "date",
+      "description": "Date de publication au Journal Officiel"
+    },
+    "intitule_long": {
+      "type": "string",
+      "description": "Intitulé complet du texte (ex: Loi relative à...)"
+    },
+    "formule_promulgation": {
+      "type": "string",
+      "description": "Phrase de promulgation (ex: Le Président de la République promulgue la loi...)"
+    },
+    "contenu": {
+      "type": "array",
+      "description": "Contenu structuré du texte (Parties, Titres, Articles, etc.)",
+      "items": {
+        "oneOf": [
+          { "$ref": "#/definitions/DivisionHierarchique" },
+          { "$ref": "#/definitions/Article" }
+        ]
+      }
+    },
+    "signatures": {
+      "type": "array",
+      "description": "Liste des signataires du texte (Président, Premier ministre, Ministres)",
+      "items": { "type": "string" }
+    }
+  },
+  "required": [
+    "numero_texte",
+    "date_publication",
+    "intitule_long",
+    "contenu"
+  ],
+  "definitions": {
+    "Article": {
+      "type": "object",
+      "title": "ArticleDeLoi",
+      "properties": {
+        "type": { "type": "string", "enum": ["Article"] },
+        "numero": {
+          "type": "string",
+          "description": "Numéro de l'article (ex: 1, 1-1, L.212-1)"
+        },
+        "texte": {
+          "type": "array",
+          "description": "Contenu de l'article divisé en alinéas ou points",
+          "items": { "type": "string" }
+        },
+        "nature": {
+          "type": "string",
+          "description": "Nature de l'article (ex: création, modification, abrogation)"
+        }
+      },
+      "required": ["type", "numero", "texte"]
+    },
+    "DivisionHierarchique": {
+      "type": "object",
+      "title": "DivisionDeTexte",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["Partie", "Titre", "Chapitre", "Section", "Sous-section", "Paragraphe"]
+        },
+        "intitule": { "type": "string", "description": "L'intitulé de la division (ex: TITRE Ier : Dispositions générales)" },
+        "elements": {
+          "type": "array",
+          "description": "Les éléments inclus dans cette division (autres divisions ou Articles)",
+          "items": {
+            "oneOf": [
+              { "$ref": "#/definitions/DivisionHierarchique" },
+              { "$ref": "#/definitions/Article" }
+            ]
+          }
+        }
+      },
+      "required": ["type", "intitule", "elements"]
+    }
+  }
+}

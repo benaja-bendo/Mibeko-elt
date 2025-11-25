@@ -1,1 +1,9 @@
+!data/raw/congo-jo-2025-26.pdf
+data/raw/*
+
+!data/processed/congo-jo-2025-26.json
+data/processed/*
+
+!data/json/congo-jo-2025-26.json
+data/json/*
 
