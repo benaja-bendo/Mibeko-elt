@@ -1,9 +1,18 @@
+# Keep sample files
 !data/raw/congo-jo-2025-26.pdf
 data/raw/*
 
-!data/processed/congo-jo-2025-26.json
+!data/processed/congo-jo-2025-26.md
 data/processed/*
 
-!data/json/congo-jo-2025-26.json
+# New output structure
+!data/out/json/congo-jo-2025-26.json
+data/out/json/*
+
+!data/out/json_schema/congo-jo-2025-26.json
+data/out/json_schema/*
+
+# Legacy (deprecated)
 data/json/*
+data/json_schema/*
 

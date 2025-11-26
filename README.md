@@ -11,12 +11,77 @@ Rendre accessible les textes juridiques (Constitution, Journal Officiel, Codes, 
 ```
 etl/
 ├── data/
-│   ├── raw/              # PDFs originaux (si disponibles)
-│   ├── processed/        # Fichiers .md convertis
-│   └── json/             # Fichiers .json générés (sortie)
-├── md_to_json_converter.py   # Script principal de conversion
-└── README.md             # Ce fichier
+│   ├── raw/              # PDFs originaux
+│   ├── processed/        # Fichiers .md extraits des PDFs
+│   └── out/
+│       ├── json/         # Sortie du converter basique
+│       └── json_schema/  # Sortie du converter structuré
+│
+├── schemas/
+│   └── journal_officiel.schema.json  # Schéma JSON strict
+│
+├── convert_jo_structured.py          # Convertisseur avec schéma strict
+├── md_to_json_converter.py          # Convertisseur basique (format libre)
+└── README.md
 ```
+
+## 🔧 Deux convertisseurs disponibles
+
+### 1. `convert_jo_structured.py` - Convertisseur structuré
+
+Génère un JSON unique par fichier MD, conforme au schéma `schemas/journal_officiel.schema.json`.
+
+**Sortie** : `data/out/json_schema/`
+
+**Commandes** :
+```bash
+# Un seul fichier
+python3 convert_jo_structured.py --input data/processed/congo-jo-2025-26.md
+
+# Tous les fichiers
+python3 convert_jo_structured.py --input-dir data/processed/
+```
+
+**Format de sortie** :
+```json
+{
+  "id": "congo-jo-2025-26",
+  "source_file": "congo-jo-2025-26.md",
+  "textes": [
+    {
+      "numero_texte": "Loi n° 10-2025",
+      "date_publication": "2025-05-28",
+      "intitule_long": "...",
+      "contenu": [
+        {
+          "type": "Titre",
+          "intitule": "TITRE I : ...",
+          "elements": [...]
+        }
+      ],
+      "signatures": ["..."]
+    }
+  ]
+}
+```
+
+---
+
+### 2. `md_to_json_converter.py` - Convertisseur basique
+
+Format simple pour analyse rapide.
+
+**Sortie** : `data/out/json/`
+
+**Commandes** :
+```bash
+# Tous les fichiers
+python3 md_to_json_converter.py --all
+
+# Un seul fichier
+python3 md_to_json_converter.py --file data/processed/congo-jo-2025-26.md
+```
+
 
 ## 🚀 Installation
 

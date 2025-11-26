@@ -1000,8 +1000,8 @@ def main():
         '--output',
         '-o',
         type=str,
-        default='data/json',
-        help='Répertoire de sortie pour les fichiers .json (défaut: data/json)'
+        default='data/out/json',
+        help='Répertoire de sortie pour les fichiers JSON (défaut: data/out/json)'
     )
     parser.add_argument(
         '--file',
@@ -1021,7 +1021,13 @@ def main():
     # Convertir
     if args.file:
         # Convertir un seul fichier
-        md_file = Path(args.input) / args.file
+        # Si le chemin est déjà absolu, l'utiliser tel quel
+        file_path = Path(args.file)
+        if not file_path.is_absolute():
+            md_file = Path(args.input) / args.file
+        else:
+            md_file = file_path
+            
         if not md_file.exists():
             print(f"❌ Fichier non trouvé: {md_file}")
             sys.exit(1)
