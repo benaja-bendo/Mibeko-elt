@@ -54,11 +54,32 @@
         "texte": {
           "type": "array",
           "description": "Contenu de l'article divisé en alinéas ou points",
-          "items": { "type": "string" }
+          "items": {
+            "type": "object",
+            "properties": {
+              "type": { "type": "string", "enum": ["alinea", "enumeration"] },
+              "content": { "type": "string" },
+              "marker": { "type": "string", "description": "Marker for enumeration (e.g. '1°', 'a)')" }
+            },
+            "required": ["type", "content"]
+          }
         },
         "nature": {
           "type": "string",
           "description": "Nature de l'article (ex: création, modification, abrogation)"
+        },
+        "references": {
+          "type": "array",
+          "description": "Références juridiques citées dans l'article",
+          "items": {
+            "type": "object",
+            "properties": {
+              "type": { "type": "string", "enum": ["loi", "decret", "arrete", "constitution", "autre"] },
+              "id": { "type": "string", "description": "UUID ou identifiant unique du texte cité si trouvé" },
+              "texte_cite": { "type": "string", "description": "Texte brut de la référence (ex: Loi n° 10-2025)" }
+            },
+            "required": ["type", "texte_cite"]
+          }
         }
       },
       "required": ["type", "numero", "texte"]

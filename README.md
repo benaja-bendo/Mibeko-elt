@@ -8,22 +8,21 @@ Rendre accessible les textes juridiques (Constitution, Journal Officiel, Codes, 
 
 ## 📁 Structure du projet
 
-```
+```text
 etl/
 ├── data/
 │   ├── raw/              # PDFs originaux
-│   ├── processed/        # Fichiers .md extraits des PDFs
+│   ├── processed/        # Fichiers .md extraits des PDFs (après OCR)
 │   └── out/
-│       ├── json/         # Sortie du converter basique
-│       └── json_schema/  # Sortie du converter structuré
+│       ├── json/         # Sortie du convertisseur basique
+│       └── json_schema/  # Sortie du convertisseur structuré (conforme au schéma)
 │
 ├── schemas/
-│   └── journal_officiel.schema.json  # Schéma JSON strict
+│   └── journal_officiel.schema.json  # Schéma JSON strict avec support des alinéas, énumérations et références
 │
-├── convert_jo_structured.py          # Convertisseur avec schéma strict
+├── convert_jo_structured.py          # Convertisseur structuré : granulation des articles, extraction des références, sanitisation OCR et validation JSON
 ├── md_to_json_converter.py          # Convertisseur basique (format libre)
-└── README.md
-```
+```└── README.md
 
 ## 🔧 Deux convertisseurs disponibles
 

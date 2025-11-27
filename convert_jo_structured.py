@@ -11,7 +11,7 @@ import argparse
 from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
 from datetime import datetime
-
+import jsonschema
 
 class SchemaCompliantConverter:
     """Converts Journal Officiel MD files to schema-compliant JSON files"""
@@ -24,16 +24,41 @@ class SchemaCompliantConverter:
         'date': r'(\d{1,2})\s+(janvier|février|fevrier|mars|avril|mai|juin|juillet|août|aout|septembre|octobre|novembre|décembre|decembre)\s+(\d{4})',
     }
     
-    def __init__(self, output_dir: Path):
+    def __init__(self, output_dir: Path, schema_path: Path):
         """
         Initialize converter
         
         Args:
             output_dir: Directory for schema-compliant JSON output
+            schema_path: Path to the JSON schema file
         """
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
-    
+        self.quarantine_dir = self.output_dir / "quarantine"
+        self.quarantine_dir.mkdir(exist_ok=True)
+        
+        with open(schema_path, 'r') as f:
+            self.schema = json.load(f)
+
+    def sanitize_content(self, content: str) -> str:
+        """
+        Sanitize content to fix common OCR errors and normalize text
+        """
+        # Common OCR replacements
+        replacements = [
+            (r'\bL0I\b', 'LOI'),
+            (r'\bArtide\b', 'Article'),
+            (r'\bDÉCRÊT\b', 'DECRET'),
+            (r'\bARRETÊ\b', 'ARRETE'),
+            (r'\bN°\s*o\b', 'N°'),  # Fix N° o -> N°
+        ]
+        
+        sanitized = content
+        for pattern, replacement in replacements:
+            sanitized = re.sub(pattern, replacement, sanitized, flags=re.IGNORECASE)
+            
+        return sanitized
+
     def find_sommaire_boundaries(self, content: str) -> Tuple[int, int]:
         """
         Find table of contents boundaries (reused from md_to_json_converter.py)
@@ -242,6 +267,65 @@ class SchemaCompliantConverter:
         
         return texts
     
+    def parse_article_content(self, article_text: str) -> List[Dict[str, str]]:
+        """
+        Parse article content into structured items (alinea, enumeration)
+        """
+        # Split by newlines to handle lists that are single-spaced
+        lines = [line.strip() for line in article_text.split('\n') if line.strip()]
+        structured_content = []
+        
+        for line in lines:
+            # Check for enumeration markers
+            enum_match = re.match(r'^(\d+[°\.]|[a-z]\)|\-)\s+(.*)', line, re.DOTALL)
+            if enum_match:
+                marker = enum_match.group(1)
+                content = enum_match.group(2)
+                structured_content.append({
+                    "type": "enumeration",
+                    "marker": marker,
+                    "content": content
+                })
+            else:
+                # If it's not an enumeration, it's an alinea.
+                # However, if the previous item was an alinea and this line doesn't start with a marker,
+                # it might be a continuation of the previous alinea?
+                # In legal texts, usually each visual paragraph (or list item) is distinct.
+                # But if we split by \n, we might split a wrapped sentence.
+                # For now, let's assume \n means new item if it looks like one, or we can merge?
+                # Given the user wants granularity, treating each line as an item (if meaningful) is better than merging incorrectly.
+                # But "Le dossier comprend :" is clearly an alinea.
+                structured_content.append({
+                    "type": "alinea",
+                    "content": line
+                })
+        
+        return structured_content
+
+    def extract_references(self, text: str) -> List[Dict[str, str]]:
+        """
+        Extract legal references from text
+        """
+        references = []
+        # Regex for finding references like "Loi n° 10-2025"
+        ref_pattern = r'(Loi|Décret|Arrêté)\s+(?:n°|N°)\s*([0-9-]+(?:\s+du\s+\d{1,2}\s+\w+\s+\d{4})?)'
+        
+        matches = re.finditer(ref_pattern, text, re.IGNORECASE)
+        for match in matches:
+            full_ref = match.group(0)
+            ref_type = match.group(1).lower()
+            # Normalize type
+            if ref_type == 'décret': ref_type = 'decret'
+            if ref_type == 'arrêté': ref_type = 'arrete'
+            
+            references.append({
+                "type": ref_type,
+                "texte_cite": full_ref,
+                # "id": "uuid-placeholder" # TODO: Implement lookup
+            })
+            
+        return references
+
     def parse_hierarchical_content(self, content: str) -> List[Dict[str, Any]]:
         """
         Parse content into schema-compliant hierarchical structure
@@ -261,17 +345,22 @@ class SchemaCompliantConverter:
             """Helper to save current article"""
             nonlocal current_article, current_article_lines
             if current_article:
-                # Split article content into paragraphs
                 article_text = '\n'.join(current_article_lines).strip()
-                paragraphs = [p.strip() for p in article_text.split('\n\n') if p.strip()]
-                if not paragraphs:
-                    paragraphs = [article_text] if article_text else []
+                
+                # Parse structured content
+                structured_text = self.parse_article_content(article_text)
+                
+                # Extract references
+                references = self.extract_references(article_text)
                 
                 article_obj = {
                     "type": "Article",
                     "numero": current_article,
-                    "texte": paragraphs
+                    "texte": structured_text
                 }
+                
+                if references:
+                    article_obj["references"] = references
                 
                 # Add to current division or top-level
                 if division_stack:
@@ -521,6 +610,9 @@ class SchemaCompliantConverter:
         # Read MD file
         content = md_file.read_text(encoding='utf-8')
         
+        # Sanitize content
+        content = self.sanitize_content(content)
+        
         # Split into individual texts
         texts = self.split_into_texts(content)
         print(f"  Found {len(texts)} legal texts")
@@ -547,6 +639,30 @@ class SchemaCompliantConverter:
             "textes": parsed_texts
         }
         
+        # Validate against schema (basic check on structure, though schema is for individual texts usually, 
+        # but here we are validating the whole output if we had a schema for it. 
+        # The user asked to validate the output. 
+        # Since the provided schema is for "DocumentJournalOfficiel" which seems to be a single text based on properties like "numero_texte",
+        # but the output is a collection.
+        # Wait, the schema has "numero_texte" at root. So the schema is for ONE text.
+        # The output file contains MANY texts.
+        # So we should validate EACH text against the schema.
+        
+        valid_texts = []
+        for text in parsed_texts:
+            try:
+                jsonschema.validate(instance=text, schema=self.schema)
+                valid_texts.append(text)
+            except jsonschema.exceptions.ValidationError as e:
+                print(f"  ⚠ Validation Error for {text.get('numero_texte', 'Unknown')}: {e.message}")
+                # Save to quarantine
+                quarantine_path = self.quarantine_dir / f"INVALID_{text.get('numero_texte', 'unknown').replace(' ', '_')}.json"
+                with open(quarantine_path, 'w', encoding='utf-8') as qf:
+                    json.dump(text, qf, ensure_ascii=False, indent=2)
+        
+        # Update output data with only valid texts
+        output_data["textes"] = valid_texts
+        
         # Generate output filename (same as input but .json)
         output_filename = f"{md_file.stem}.json"
         output_path = self.output_dir / output_filename
@@ -556,9 +672,11 @@ class SchemaCompliantConverter:
             json.dump(output_data, f, ensure_ascii=False, indent=2)
         
         print(f"\n✓ Created: {output_filename}")
-        print(f"  Contains: {converted_count} legal texts")
+        print(f"  Contains: {len(valid_texts)} valid legal texts")
+        if len(parsed_texts) > len(valid_texts):
+            print(f"  ⚠ {len(parsed_texts) - len(valid_texts)} texts failed validation (see quarantine)")
         
-        return converted_count
+        return len(valid_texts)
 
 
 def main():
@@ -581,14 +699,24 @@ def main():
         default=Path('data/out/json_schema'),
         help='Output directory for JSON files (default: data/out/json_schema)'
     )
+    parser.add_argument(
+        '--schema',
+        type=Path,
+        default=Path('schemas/journal_officiel.schema.json'),
+        help='Path to JSON schema file'
+    )
     
     args = parser.parse_args()
     
     if not args.input and not args.input_dir:
         parser.error('Either --input or --input-dir must be specified')
     
+    if not args.schema.exists():
+        print(f"Error: Schema file not found: {args.schema}")
+        return 1
+
     # Create converter
-    converter = SchemaCompliantConverter(args.output_dir)
+    converter = SchemaCompliantConverter(args.output_dir, args.schema)
     
     total_converted = 0
     

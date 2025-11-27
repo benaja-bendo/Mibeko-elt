@@ -1009,6 +1009,11 @@ def main():
         type=str,
         help='Convertir un seul fichier spécifique'
     )
+    parser.add_argument(
+        '--all',
+        action='store_true',
+        help='Convertir tous les fichiers (défaut si --file n\'est pas spécifié)'
+    )
     
     args = parser.parse_args()
     
