@@ -14,6 +14,7 @@ from pathlib import Path
 import argparse
 from typing import Dict, Any, Optional, List
 from datetime import date, datetime
+import uuid
 
 # Configuration de la base de données
 DB_HOST = os.getenv("DB_HOST", "localhost")
@@ -32,6 +33,21 @@ def get_db_connection():
         password=DB_PASSWORD
     )
     return conn
+
+def table_has_column(cursor, table_name: str, column_name: str) -> bool:
+    """Vérifie si une colonne existe dans une table."""
+    cursor.execute(
+        """
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = 'public'
+          AND table_name = %s
+          AND column_name = %s
+        LIMIT 1
+        """,
+        (table_name, column_name)
+    )
+    return cursor.fetchone() is not None
 
 def sanitize_ltree_label(label: str) -> str:
     """
@@ -94,16 +110,18 @@ def insert_legal_document(cursor, texte: Dict[str, Any], publication_date: Optio
     
     sql = """
     INSERT INTO legal_documents (
+        id,
         type_code, 
         titre_officiel, 
         date_signature, 
         date_publication, 
         statut
-    ) VALUES (%s, %s, %s, %s, 'vigueur')
+    ) VALUES (%s, %s, %s, %s, %s, 'vigueur')
     RETURNING id;
     """
     
     cursor.execute(sql, (
+        str(uuid.uuid4()),
         type_code,
         texte.get('intitule_long', 'Sans titre'),
         date_sig,
@@ -170,12 +188,13 @@ def insert_structure_elements(cursor, doc_id: str, elements: List[Dict[str, Any]
             # Insertion dans structure_nodes
             sql_node = """
             INSERT INTO structure_nodes (
+                id,
                 document_id,
                 type_unite,
                 numero,
                 titre,
                 tree_path
-            ) VALUES (%s, %s, %s, %s, %s::ltree)
+            ) VALUES (%s, %s, %s, %s, %s, %s)
             RETURNING id;
             """
             
@@ -187,6 +206,7 @@ def insert_structure_elements(cursor, doc_id: str, elements: List[Dict[str, Any]
             titre_candidat = parts[1].strip() if len(parts) > 1 else ""
             
             cursor.execute(sql_node, (
+                str(uuid.uuid4()),
                 doc_id,
                 el_type,
                 numero_candidat,
@@ -204,7 +224,7 @@ def insert_article(cursor, doc_id: str, article_data: Dict[str, Any], parent_pat
     
     # 1. Récupérer l'ID du parent (le noeud de structure correspondant au parent_path)
     # Attention: parent_path est le path ltree.
-    cursor.execute("SELECT id FROM structure_nodes WHERE document_id = %s AND tree_path = %s::ltree", (doc_id, parent_path))
+    cursor.execute("SELECT id FROM structure_nodes WHERE document_id = %s AND tree_path = %s", (doc_id, parent_path))
     res = cursor.fetchone()
     parent_id = res[0] if res else None
     
@@ -213,14 +233,15 @@ def insert_article(cursor, doc_id: str, article_data: Dict[str, Any], parent_pat
     
     sql_article = """
     INSERT INTO articles (
+        id,
         document_id,
         parent_node_id,
         numero_article,
         ordre_affichage
-    ) VALUES (%s, %s, %s, %s)
+    ) VALUES (%s, %s, %s, %s, %s)
     RETURNING id;
     """
-    cursor.execute(sql_article, (doc_id, parent_id, numero, ordre))
+    cursor.execute(sql_article, (str(uuid.uuid4()), doc_id, parent_id, numero, ordre))
     article_id = cursor.fetchone()[0]
     
     # 3. Créer la version (Contenu)
@@ -242,21 +263,89 @@ def insert_article(cursor, doc_id: str, article_data: Dict[str, Any], parent_pat
         
     validity = f"[{date_start},)"
     
-    sql_version = """
-    INSERT INTO article_versions (
-        article_id,
-        validity_period,
-        contenu_texte,
-        modifie_par_document_id
-    ) VALUES (%s, %s::daterange, %s, %s)
-    """
+    has_validity = table_has_column(cursor, 'article_versions', 'validity_period')
+    has_modifier = table_has_column(cursor, 'article_versions', 'modifie_par_document_id')
     
-    cursor.execute(sql_version, (
-        article_id,
-        validity,
-        contenu_complet,
-        doc_id # La version initiale est créée par le document lui-même
-    ))
+    if has_validity and has_modifier:
+        sql_version = """
+        INSERT INTO article_versions (
+            id,
+            article_id,
+            validity_period,
+            contenu_texte,
+            modifie_par_document_id
+        ) VALUES (%s, %s::daterange, %s, %s, %s)
+        """
+        cursor.execute(sql_version, (
+            str(uuid.uuid4()),
+            article_id,
+            validity,
+            contenu_complet,
+            doc_id
+        ))
+    elif has_validity and not has_modifier:
+        sql_version = """
+        INSERT INTO article_versions (
+            id,
+            article_id,
+            validity_period,
+            contenu_texte
+        ) VALUES (%s, %s::daterange, %s, %s)
+        """
+        cursor.execute(sql_version, (
+            str(uuid.uuid4()),
+            article_id,
+            validity,
+            contenu_complet
+        ))
+    else:
+        has_valid_from = table_has_column(cursor, 'article_versions', 'valid_from')
+        has_valid_to = table_has_column(cursor, 'article_versions', 'valid_to')
+        if has_valid_from and has_valid_to:
+            sql_version = """
+            INSERT INTO article_versions (
+                id,
+                article_id,
+                contenu_texte,
+                valid_from,
+                valid_to
+            ) VALUES (%s, %s, %s, %s, %s)
+            """
+            cursor.execute(sql_version, (
+                str(uuid.uuid4()),
+                article_id,
+                contenu_complet,
+                date_start,
+                None
+            ))
+        elif has_valid_from and not has_valid_to:
+            sql_version = """
+            INSERT INTO article_versions (
+                id,
+                article_id,
+                contenu_texte,
+                valid_from
+            ) VALUES (%s, %s, %s, %s)
+            """
+            cursor.execute(sql_version, (
+                str(uuid.uuid4()),
+                article_id,
+                contenu_complet,
+                date_start
+            ))
+        else:
+            sql_version = """
+            INSERT INTO article_versions (
+                id,
+                article_id,
+                contenu_texte
+            ) VALUES (%s, %s, %s)
+            """
+            cursor.execute(sql_version, (
+                str(uuid.uuid4()),
+                article_id,
+                contenu_complet
+            ))
 
 def process_file(filepath: Path):
     """Traite un fichier JSON."""

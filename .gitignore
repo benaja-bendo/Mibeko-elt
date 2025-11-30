@@ -17,3 +17,6 @@ data/json/*
 data/json_schema/*
 
 .idea
+
+# Python cache
+__pycache__
