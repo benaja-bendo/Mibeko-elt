@@ -14,34 +14,102 @@ Rendre accessible les textes juridiques (Constitution, Journal Officiel, Codes, 
 │   ├── processed/        # Fichiers .md extraits des PDFs (après OCR)
 │   └── out/
 │       ├── json/         # Sortie du convertisseur basique
-│       └── json_schema/  # Sortie du convertisseur structuré (conforme au schéma)
+│       ├── quarantine/   # Fichiers JSON invalides (ne respectant pas le schéma)
+│       └── *.json        # Fichiers JSON valides prêts pour l'import
 │
 ├── schemas/
 │   └── journal_officiel.schema.json  # Schéma JSON strict avec support des alinéas, énumérations et références
 │
 ├── convert_jo_structured.py          # Convertisseur structuré : granulation des articles, extraction des références, sanitisation OCR et validation JSON
 ├── md_to_json_converter.py          # Convertisseur basique (format libre)
+├── load_json_to_postgres.py         # Script de chargement en base de données
 └── README.md
 ```
 
-## 🔧 Deux convertisseurs disponibles
+## 🔧 Workflow Principal
 
-### 1. `convert_jo_structured.py` - Convertisseur structuré
+### 1. Conversion (`convert_jo_structured.py`)
 
-Génère un JSON unique par fichier MD, conforme au schéma `schemas/journal_officiel.schema.json`.
+Convertit les fichiers Markdown en JSON structuré conforme au schéma `schemas/journal_officiel.schema.json`.
 
-**Sortie** : `data/out/json_schema/`
+**Flux par défaut** :
+- **Entrée** : `data/processed/*.md`
+- **Sortie** : `data/out/*.json`
+- **Quarantaine** : `data/out/quarantine/`
 
 **Commandes** :
 ```bash
-# Un seul fichier
-python3 convert_jo_structured.py --input data/processed/congo-jo-2025-26.md
+# Convertir tous les fichiers du dossier par défaut (data/processed)
+python3 convert_jo_structured.py
 
-# Tous les fichiers
-python3 convert_jo_structured.py --input-dir data/processed/
+# Convertir un fichier spécifique
+python3 convert_jo_structured.py --input data/processed/congo-jo-2025-26.md
 ```
 
-**Format de sortie** :
+**Gestion des erreurs (Quarantaine)** :
+Les fichiers JSON générés sont validés contre le schéma JSON. Si un fichier est invalide (structure incorrecte, champs manquants), il est automatiquement déplacé dans le dossier `data/out/quarantine/` pour inspection manuelle. Cela garantit que seules les données valides sont disponibles pour le chargement.
+
+### 2. Chargement en Base de Données (`load_json_to_postgres.py`)
+
+Charge les fichiers JSON valides dans la base de données PostgreSQL. Supporte la hiérarchie complète (`ltree`) et le versioning des articles.
+
+**Flux par défaut** :
+- **Entrée** : `data/out/*.json`
+
+**Commandes** :
+```bash
+# Charger tous les fichiers JSON du dossier par défaut (data/out)
+python3 load_json_to_postgres.py
+```
+
+## 🚀 Installation
+
+### Prérequis
+
+- Python 3.8 ou supérieur
+- PostgreSQL avec extension `ltree` (et optionnellement `vector`)
+- Dépendances : `pip install -r requirements.txt`
+
+### Installation rapide
+
+```bash
+# Cloner ou télécharger le projet
+git clone https://github.com/benaja-bendo/Mibeko-etl.git
+cd Mibeko-etl
+pip install -r requirements.txt
+```
+
+## 💻 Utilisation Complète
+
+### 1. Initialisation de la Base de Données
+
+```bash
+# Attention: Supprime les données existantes et recrée les tables
+python3 apply_schema.py
+```
+
+### 2. Conversion (Markdown -> JSON)
+
+```bash
+python3 convert_jo_structured.py
+```
+
+### 3. Chargement (JSON -> PostgreSQL)
+
+```bash
+python3 load_json_to_postgres.py
+```
+
+### 4. Vérification
+
+```bash
+python3 verify_data.py
+```
+
+## 📊 Structure des données JSON
+
+### Format de sortie
+
 ```json
 {
   "id": "congo-jo-2025-26",
@@ -61,201 +129,6 @@ python3 convert_jo_structured.py --input-dir data/processed/
       "signatures": ["..."]
     }
   ]
-}
-```
-
----
-
-### 2. `md_to_json_converter.py` - Convertisseur basique
-
-Format simple pour analyse rapide.
-
-**Sortie** : `data/out/json/`
-
-**Commandes** :
-```bash
-# Tous les fichiers
-python3 md_to_json_converter.py --all
-
-# Un seul fichier
-python3 md_to_json_converter.py --file data/processed/congo-jo-2025-26.md
-```
-
-
-## 🚀 Installation
-
-### Prérequis
-
-- Python 3.8 ou supérieur
-- Aucune dépendance externe requise (utilise uniquement la bibliothèque standard Python)
-
-### Installation rapide
-
-```bash
-# Cloner ou télécharger le projet
-git clone https://github.com/benaja-bendo/Mibeko-etl.git
-
-cd Mibeko-etl
-# Le script est prêt à l'emploi, aucune installation nécessaire!
-```
-
-## 💻 Utilisation
-
-### Conversion de tous les fichiers
-
-```bash
-python3 md_to_json_converter.py
-```
-
-Cela convertira tous les fichiers `.md` de `data/processed/` vers `data/json/`
-
-### Conversion d'un fichier spécifique
-
-```bash
-python3 md_to_json_converter.py --file congo-jo-1959-02.md
-```
-
-### Options disponibles
-
-```bash
-# Spécifier le répertoire d'entrée
-python3 md_to_json_converter.py --input data/processed
-
-# Spécifier le répertoire de sortie
-python3 md_to_json_converter.py --output data/json
-
-# Aide complète
-python3 md_to_json_converter.py --help
-```
-
-## 📊 Structure des données JSON
-
-### Format de sortie
-
-Chaque fichier JSON généré contient :
-
-```json
-{
-  "id": "congo-jo-1959-02",
-  "numero_parution": "02",
-  "date_parution": null,
-  "annee": 1959,
-  "titre": "JOURNAL OFFICIEL DE LA RÉPUBLIQUE DU CONGO",
-  "textes": [
-    {
-      "id": "congo-jo-1959-02-loi-3-58",
-      "type_texte": "LOI",
-      "numero": "3/58",
-      "date": "1958-12-29",
-      "titre": "LOI N° 3/58 DU 29 DECEMBRE 1958",
-      "contenu": "Texte complet...",
-      "articles": [
-        {
-          "numero": "1er",
-          "contenu": "Les alineas 3 et 4 de l'article 3..."
-        },
-        {
-          "numero": "2",
-          "contenu": "Pendant la durée des sessions..."
-        }
-      ],
-      "references": [
-        {
-          "type_texte": "Vu",
-          "reference": "la loi constitutionnelle n° 1 du 28 novembre 1958"
-        }
-      ],
-      "signataires": [
-        {
-          "nom": "Abbe F. Youlou",
-          "fonction": "Premier Ministre",
-          "pour": "Par le Premier Ministre"
-        }
-      ]
-    }
-  ]
-}
-```
-
-### Types de textes extraits
-
-Le convertisseur identifie et extrait les types suivants :
-
-- **LOI** : Lois ordinaires
-- **LOI_CONSTITUTIONNELLE** : Lois constitutionnelles
-- **DECRET** : Décrets
-- **ARRETE** : Arrêtés
-- **CONVENTION** : Conventions internationales
-- **DELIBERATION** : Délibérations
-- **DECISION** : Décisions
-- **INSTRUCTION** : Instructions
-- **ORDONNANCE** : Ordonnances
-- **PROCLAMATION** : Proclamations
-- **DISCOURS** : Discours officiels
-
-## 🔍 Fonctionnalités d'extraction
-
-Le script extrait automatiquement :
-
-### 1. Métadonnées du texte
-- Type de texte (LOI, DECRET, etc.)
-- Numéro du texte
-- Date de signature
-- Titre complet
-
-### 2. Structure du texte
-- **Articles** : Tous les articles avec leur numéro et contenu
-- **Références** : Textes cités (Vu la loi..., Vu le décret...)
-- **Signataires** : Personnes ayant signé le texte avec leurs fonctions
-
-### 3. Normalisation des données
-- Dates converties au format ISO (YYYY-MM-DD)
-- Numéros standardisés
-- IDs uniques générés automatiquement
-
-## �️ Chargement en Base de Données (PostgreSQL)
-
-Une fois les fichiers JSON générés, vous pouvez les charger dans une base de données PostgreSQL structurée.
-
-### Prérequis
-- PostgreSQL installé et configuré
-- Dépendances Python : `pip install -r requirements.txt`
-
-### Procédure
-1. **Créer le schéma** : Exécutez le script SQL `database/schema_postgres.sql` dans votre base de données.
-2. **Charger les données** : Utilisez le script `load_json_to_postgres.py`.
-
-```bash
-# Charger un dossier complet
-python3 load_json_to_postgres.py data/out/json
-
-# Charger un fichier spécifique
-python3 load_json_to_postgres.py data/out/json/congo-jo-2025-26.json
-```
-
-Pour plus de détails, consultez le [Guide de Chargement](GUIDE_CHARGEMENT.md).
-
-## �📈 Statistiques de conversion
-
-Après chaque conversion complète, un fichier `_conversion_stats.json` est généré dans le répertoire de sortie avec :
-
-- Nombre total de fichiers traités
-- Nombre total de textes extraits
-- Répartition par type de texte
-- Liste des fichiers traités
-
-Exemple :
-```json
-{
-  "total_fichiers": 7,
-  "total_textes": 156,
-  "types_textes": {
-    "LOI": 45,
-    "DECRET": 67,
-    "ARRETE": 34,
-    "CONVENTION": 10
-  },
-  "fichiers_traites": ["congo-jo-1958-01.md", ...]
 }
 ```
 
@@ -280,17 +153,6 @@ Moteur de conversion avec :
 - Extraction par regex des structures
 - Normalisation des données
 
-### Patterns d'extraction
-
-Le script utilise des expressions régulières sophistiquées pour détecter :
-
-```python
-# Exemples de patterns
-'loi': r'LOI\s+(?:N°|n°|No)\s*([\d/-]+)\s+(?:DU|du)\s+([^\n]+)'
-'article': r'^(?:Art\.|ART\.|Article)\s*(\d+(?:er|ème|°)?)\s*\.?'
-'date': r'(\d{1,2})\s+(janvier|février|...|décembre)\s+(\d{4})'
-```
-
 ## 🎨 Améliorations futures
 
 - [ ] Extraction des tableaux (tarifs, budgets)
@@ -302,32 +164,13 @@ Le script utilise des expressions régulières sophistiquées pour détecter :
 - [ ] Base de données SQLite(mobile)/PostgreSQL(web)
 - [ ] Moteur de recherche full-text
 
-## 📱 Utilisation mobile
-
-Les fichiers JSON générés peuvent être :
-
-1. **Intégrés dans une app mobile** (React Native, Flutter)
-2. **Servis via une API REST**
-3. **Stockés localement** pour consultation hors-ligne
-4. **Indexés** pour recherche rapide
-
 ## 🤝 Contribution
 
-Ce projet vise à améliorer l'accès à la justice au Congo-Brazzaville. Toute contribution est bienvenue :
-
-- Amélioration des regex d'extraction
-- Ajout de nouveaux types de documents
-- Correction des erreurs d'extraction
-- Interface utilisateur
-- Documentation
+Ce projet vise à améliorer l'accès à la justice au Congo-Brazzaville. Toute contribution est bienvenue.
 
 ## 📄 Licence
 
 Ce projet est destiné à servir l'intérêt public en facilitant l'accès aux textes de loi.
-
-## 📞 Contact
-
-Pour toute question ou suggestion d'amélioration, n'hésitez pas à contribuer!
 
 ---
 

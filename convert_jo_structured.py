@@ -691,13 +691,14 @@ def main():
     parser.add_argument(
         '--input-dir',
         type=Path,
-        help='Input directory containing MD files'
+        default=Path('data/processed'),
+        help='Input directory containing MD files (default: data/processed)'
     )
     parser.add_argument(
         '--output-dir',
         type=Path,
-        default=Path('data/out/json_schema'),
-        help='Output directory for JSON files (default: data/out/json_schema)'
+        default=Path('data/out'),
+        help='Output directory for JSON files (default: data/out)'
     )
     parser.add_argument(
         '--schema',
@@ -708,8 +709,8 @@ def main():
     
     args = parser.parse_args()
     
-    if not args.input and not args.input_dir:
-        parser.error('Either --input or --input-dir must be specified')
+    # if not args.input and not args.input_dir:
+    #     parser.error('Either --input or --input-dir must be specified')
     
     if not args.schema.exists():
         print(f"Error: Schema file not found: {args.schema}")

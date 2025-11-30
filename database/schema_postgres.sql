@@ -3,8 +3,17 @@
 -- ===========================================================
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";   -- Pour les IDs uniques
 CREATE EXTENSION IF NOT EXISTS "ltree";       -- Pour la hiérarchie performante
-CREATE EXTENSION IF NOT EXISTS "vector";      -- Pour la recherche sémantique (RAG)
+-- CREATE EXTENSION IF NOT EXISTS "vector";      -- Pour la recherche sémantique (RAG)
 CREATE EXTENSION IF NOT EXISTS "btree_gist";  -- Pour les contraintes de temps (exclude)
+
+-- NETTOYAGE (Attention: supprime les données existantes)
+DROP TABLE IF EXISTS document_relations CASCADE;
+DROP TABLE IF EXISTS article_versions CASCADE;
+DROP TABLE IF EXISTS articles CASCADE;
+DROP TABLE IF EXISTS structure_nodes CASCADE;
+DROP TABLE IF EXISTS legal_documents CASCADE;
+DROP TABLE IF EXISTS institutions CASCADE;
+DROP TABLE IF EXISTS document_types CASCADE;
 
 -- ===========================================================
 -- 1. TABLE : METADONNÉES DES DOCUMENTS (Le contenant)
@@ -102,7 +111,7 @@ CREATE TABLE article_versions (
     
     -- Recherche : Hybride (Full Text + Vector)
     search_tsv TSVECTOR GENERATED ALWAYS AS (to_tsvector('french', contenu_texte)) STORED,
-    embedding VECTOR(1536), -- Dimension 1536 pour OpenAI ada-002 (à adapter selon votre modèle)
+    -- embedding VECTOR(1536), -- Dimension 1536 pour OpenAI ada-002 (à adapter selon votre modèle)
     
     -- Métadonnées de modification
     modifie_par_document_id UUID REFERENCES legal_documents(id), -- Quelle loi a créé cette version ?
@@ -119,7 +128,7 @@ CREATE TABLE article_versions (
 
 CREATE INDEX idx_versions_search ON article_versions USING GIN(search_tsv);
 -- Index HNSW pour la recherche vectorielle rapide
-CREATE INDEX idx_versions_embedding ON article_versions USING hnsw (embedding vector_cosine_ops);
+-- CREATE INDEX idx_versions_embedding ON article_versions USING hnsw (embedding vector_cosine_ops);
 
 -- ===========================================================
 -- 5. TABLE : LIENS ET CITATIONS (Le Graph Juridique)

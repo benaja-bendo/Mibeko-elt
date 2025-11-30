@@ -6,11 +6,11 @@ data/raw/*
 data/processed/*
 
 # New output structure
-!data/out/json/congo-jo-2025-26.json
 data/out/json/*
-
-!data/out/json_schema/congo-jo-2025-26.json
+data/out/*
 data/out/json_schema/*
+!data/out/json/congo-jo-2025-26.json
+!data/out/congo-jo-2025-26.json
 
 # Legacy (deprecated)
 data/json/*
