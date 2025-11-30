@@ -16,3 +16,4 @@ data/out/json_schema/*
 data/json/*
 data/json_schema/*
 
+.idea

@@ -9,7 +9,6 @@ Rendre accessible les textes juridiques (Constitution, Journal Officiel, Codes, 
 ## 📁 Structure du projet
 
 ```text
-etl/
 ├── data/
 │   ├── raw/              # PDFs originaux
 │   ├── processed/        # Fichiers .md extraits des PDFs (après OCR)
@@ -22,7 +21,8 @@ etl/
 │
 ├── convert_jo_structured.py          # Convertisseur structuré : granulation des articles, extraction des références, sanitisation OCR et validation JSON
 ├── md_to_json_converter.py          # Convertisseur basique (format libre)
-```└── README.md
+└── README.md
+```
 
 ## 🔧 Deux convertisseurs disponibles
 
@@ -213,7 +213,29 @@ Le script extrait automatiquement :
 - Numéros standardisés
 - IDs uniques générés automatiquement
 
-## 📈 Statistiques de conversion
+## �️ Chargement en Base de Données (PostgreSQL)
+
+Une fois les fichiers JSON générés, vous pouvez les charger dans une base de données PostgreSQL structurée.
+
+### Prérequis
+- PostgreSQL installé et configuré
+- Dépendances Python : `pip install -r requirements.txt`
+
+### Procédure
+1. **Créer le schéma** : Exécutez le script SQL `database/schema_postgres.sql` dans votre base de données.
+2. **Charger les données** : Utilisez le script `load_json_to_postgres.py`.
+
+```bash
+# Charger un dossier complet
+python3 load_json_to_postgres.py data/out/json
+
+# Charger un fichier spécifique
+python3 load_json_to_postgres.py data/out/json/congo-jo-2025-26.json
+```
+
+Pour plus de détails, consultez le [Guide de Chargement](GUIDE_CHARGEMENT.md).
+
+## �📈 Statistiques de conversion
 
 Après chaque conversion complète, un fichier `_conversion_stats.json` est généré dans le répertoire de sortie avec :
 

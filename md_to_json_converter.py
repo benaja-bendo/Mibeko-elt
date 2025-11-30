@@ -1026,9 +1026,13 @@ def main():
     # Convertir
     if args.file:
         # Convertir un seul fichier
-        # Si le chemin est déjà absolu, l'utiliser tel quel
         file_path = Path(args.file)
-        if not file_path.is_absolute():
+        
+        # Vérifier si le fichier existe tel quel
+        if file_path.exists():
+            md_file = file_path
+        # Sinon, essayer de le trouver dans le dossier d'entrée
+        elif not file_path.is_absolute():
             md_file = Path(args.input) / args.file
         else:
             md_file = file_path

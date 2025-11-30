@@ -1,116 +1,138 @@
--- Schéma PostgreSQL pour Mibeko (Textes de loi du Congo)
--- Créé le 25/11/2025
+-- ===========================================================
+-- INITIALISATION DES EXTENSIONS
+-- ===========================================================
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";   -- Pour les IDs uniques
+CREATE EXTENSION IF NOT EXISTS "ltree";       -- Pour la hiérarchie performante
+CREATE EXTENSION IF NOT EXISTS "vector";      -- Pour la recherche sémantique (RAG)
+CREATE EXTENSION IF NOT EXISTS "btree_gist";  -- Pour les contraintes de temps (exclude)
 
--- 1. Table des publications (Journaux Officiels)
-CREATE TABLE publications (
-    id VARCHAR(50) PRIMARY KEY, -- ex: "congo-jo-2025-26"
-    numero_parution VARCHAR(50),
-    date_parution DATE,
-    annee INTEGER,
+-- ===========================================================
+-- 1. TABLE : METADONNÉES DES DOCUMENTS (Le contenant)
+-- Inspiré de schema02 pour la richesse
+-- ===========================================================
+-- Types de textes (Lois, Codes, Décrets...)
+CREATE TABLE document_types (
+    code VARCHAR(10) PRIMARY KEY, -- LOI, DEC, ORD, CODE, CONST
+    nom VARCHAR(50) NOT NULL,
+    niveau_hierarchique INT DEFAULT 0 -- 1=Constitution, 2=Loi, etc.
+);
+-- Institutions (Qui a émis le texte ?)
+CREATE TABLE institutions (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    nom VARCHAR(200) NOT NULL,
+    sigle VARCHAR(50)
+);
+-- Textes officiels (Les documents eux-mêmes)
+CREATE TABLE legal_documents (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    type_code VARCHAR(10) REFERENCES document_types(code),
+    institution_id UUID REFERENCES institutions(id),
+    
+    titre_officiel TEXT NOT NULL, -- "Loi n° 2024-..."
+    reference_nor VARCHAR(50),    -- Numéro unique administratif si dispo
+    
+    date_signature DATE,
+    date_publication DATE,
+    date_entree_vigueur DATE,
+    
+    source_url TEXT,              -- Lien PDF original
+    statut VARCHAR(20) CHECK (statut IN ('vigueur', 'abroge', 'projet')) DEFAULT 'vigueur',
+    
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+);
+
+-- ===========================================================
+-- 2. TABLE : SQUELETTE STRUCTUREL (Materialized Path)
+-- C'est ici qu'on gère "Livre > Titre > Chapitre"
+-- ===========================================================
+CREATE TABLE structure_nodes (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    document_id UUID NOT NULL REFERENCES legal_documents(id) ON DELETE CASCADE,
+    
+    -- Le "Label" du noeud (ex: "Livre", "Titre", "Chapitre")
+    type_unite VARCHAR(50) NOT NULL, 
+    
+    -- Le numéro/titre (ex: "I", "Dispositions Générales")
+    numero VARCHAR(50), 
     titre TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    
+    -- LA MAGIE LTREE : Chemin matérialisé
+    -- Exemple de path : "root.livre1.titre2.chap1"
+    tree_path ltree NOT NULL,
+    
+    created_at TIMESTAMP DEFAULT NOW()
 );
 
--- 2. Table des textes légaux (Lois, Décrets, Arrêtés...)
-CREATE TABLE textes (
-    id VARCHAR(100) PRIMARY KEY, -- ex: "congo-jo-2025-26-loi-10-2025"
-    publication_id VARCHAR(50) REFERENCES publications(id) ON DELETE CASCADE,
-    type_texte VARCHAR(50), -- LOI, DECRET, ARRETE, etc.
-    numero VARCHAR(50), -- ex: "10-2025"
-    date_texte DATE,
-    titre TEXT,
-    contenu TEXT, -- Contenu complet nettoyé
-    preambule TEXT,
-    page_debut INTEGER,
-    page_fin INTEGER,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
+-- Index pour rechercher instantanément tous les enfants d'un noeud
+CREATE INDEX idx_structure_path ON structure_nodes USING GIST (tree_path);
+CREATE INDEX idx_structure_doc ON structure_nodes(document_id);
 
--- Index pour la recherche textuelle
-CREATE INDEX idx_textes_type ON textes(type_texte);
-CREATE INDEX idx_textes_numero ON textes(numero);
-CREATE INDEX idx_textes_date ON textes(date_texte);
-
--- 3. Structure Hiérarchique : Titres
-CREATE TABLE titres (
-    id SERIAL PRIMARY KEY,
-    texte_id VARCHAR(100) REFERENCES textes(id) ON DELETE CASCADE,
-    numero VARCHAR(50), -- ex: "I", "II"
-    intitule TEXT, -- ex: "DISPOSITIONS GENERALES"
-    contenu_libre TEXT,
-    ordre INTEGER -- Pour maintenir l'ordre d'affichage
-);
-
--- 4. Structure Hiérarchique : Chapitres
-CREATE TABLE chapitres (
-    id SERIAL PRIMARY KEY,
-    texte_id VARCHAR(100) REFERENCES textes(id) ON DELETE CASCADE,
-    titre_id INTEGER REFERENCES titres(id) ON DELETE CASCADE, -- Peut être NULL si hors titre
-    numero VARCHAR(50), -- ex: "1", "premier"
-    titre TEXT,
-    contenu_libre TEXT,
-    ordre INTEGER
-);
-
--- 5. Structure Hiérarchique : Sections
-CREATE TABLE sections (
-    id SERIAL PRIMARY KEY,
-    texte_id VARCHAR(100) REFERENCES textes(id) ON DELETE CASCADE,
-    chapitre_id INTEGER REFERENCES chapitres(id) ON DELETE CASCADE, -- Peut être NULL si hors chapitre
-    titre_id INTEGER REFERENCES titres(id) ON DELETE CASCADE, -- Rare, mais possible
-    numero VARCHAR(50),
-    titre TEXT,
-    contenu_libre TEXT,
-    ordre INTEGER
-);
-
--- 6. Table des articles
+-- ===========================================================
+-- 3. TABLE : ARTICLES (L'identité stable)
+-- L'article "12" existe toujours, même si son texte change.
+-- ===========================================================
 CREATE TABLE articles (
-    id SERIAL PRIMARY KEY,
-    texte_id VARCHAR(100) REFERENCES textes(id) ON DELETE CASCADE,
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    document_id UUID NOT NULL REFERENCES legal_documents(id) ON DELETE CASCADE,
     
-    -- Liens hiérarchiques (un seul devrait être non-NULL idéalement, ou en cascade)
-    titre_id INTEGER REFERENCES titres(id) ON DELETE CASCADE,
-    chapitre_id INTEGER REFERENCES chapitres(id) ON DELETE CASCADE,
-    section_id INTEGER REFERENCES sections(id) ON DELETE CASCADE,
+    -- Rattachement à la structure (peut être NULL si l'article est orphelin/préliminaire)
+    parent_node_id UUID REFERENCES structure_nodes(id),
     
-    numero VARCHAR(50), -- ex: "1", "1er", "2"
-    intitule TEXT, -- Optionnel (ex: "Définitions")
-    contenu TEXT NOT NULL,
-    ordre INTEGER
+    numero_article VARCHAR(50) NOT NULL, -- "1", "2 bis", "Art. 4"
+    ordre_affichage INT DEFAULT 0,
+    
+    created_at TIMESTAMP DEFAULT NOW()
 );
 
--- Index pour la recherche d'articles
-CREATE INDEX idx_articles_texte ON articles(texte_id);
-CREATE INDEX idx_articles_numero ON articles(numero);
-
--- 7. Table des signataires
-CREATE TABLE signataires (
-    id SERIAL PRIMARY KEY,
-    texte_id VARCHAR(100) REFERENCES textes(id) ON DELETE CASCADE,
-    nom VARCHAR(255),
-    fonction VARCHAR(255),
-    pour VARCHAR(255) -- ex: "Pour le ministre..."
+-- ===========================================================
+-- 4. TABLE : VERSIONS D'ARTICLES (Le contenu & RAG)
+-- Gère l'historique et la recherche vectorielle
+-- ===========================================================
+CREATE TABLE article_versions (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    article_id UUID NOT NULL REFERENCES articles(id) ON DELETE CASCADE,
+    
+    -- Période de validité (Daterange est natif PG)
+    -- '[2020-01-01, 2024-01-01)' veut dire valide de 2020 inclus à 2024 exclu.
+    validity_period DATERANGE NOT NULL,
+    
+    -- Contenu
+    contenu_texte TEXT NOT NULL,
+    
+    -- Recherche : Hybride (Full Text + Vector)
+    search_tsv TSVECTOR GENERATED ALWAYS AS (to_tsvector('french', contenu_texte)) STORED,
+    embedding VECTOR(1536), -- Dimension 1536 pour OpenAI ada-002 (à adapter selon votre modèle)
+    
+    -- Métadonnées de modification
+    modifie_par_document_id UUID REFERENCES legal_documents(id), -- Quelle loi a créé cette version ?
+    
+    created_at TIMESTAMP DEFAULT NOW(),
+    
+    -- CONTRAINTE D'INTEGRITÉ TEMPORELLE
+    -- Empêche d'avoir deux versions valides en même temps pour le même article
+    EXCLUDE USING GIST (
+        article_id WITH =,
+        validity_period WITH &&
+    )
 );
 
--- 8. Table des références (Textes visés : "Vu la loi...")
-CREATE TABLE references (
-    id SERIAL PRIMARY KEY,
-    texte_id VARCHAR(100) REFERENCES textes(id) ON DELETE CASCADE,
-    type_reference VARCHAR(50), -- "Vu", "Conformément à"
-    contenu_reference TEXT
-);
+CREATE INDEX idx_versions_search ON article_versions USING GIN(search_tsv);
+-- Index HNSW pour la recherche vectorielle rapide
+CREATE INDEX idx_versions_embedding ON article_versions USING hnsw (embedding vector_cosine_ops);
 
--- Vue pour faciliter la recherche globale (Full Text Search)
--- Nécessite la configuration de la recherche textuelle PostgreSQL (tsvector)
-/*
-CREATE VIEW vue_recherche_globale AS
-SELECT 
-    t.id AS texte_id,
-    t.titre AS texte_titre,
-    a.numero AS article_numero,
-    a.contenu AS article_contenu,
-    to_tsvector('french', t.titre || ' ' || coalesce(a.contenu, '')) AS document_vector
-FROM textes t
-JOIN articles a ON a.texte_id = t.id;
-*/
+-- ===========================================================
+-- 5. TABLE : LIENS ET CITATIONS (Le Graph Juridique)
+-- ===========================================================
+CREATE TABLE document_relations (
+    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    source_doc_id UUID REFERENCES legal_documents(id),
+    target_doc_id UUID REFERENCES legal_documents(id),
+    
+    -- Si le lien est précis au niveau article
+    source_article_id UUID REFERENCES articles(id),
+    target_article_id UUID REFERENCES articles(id),
+    
+    relation_type VARCHAR(50) CHECK (relation_type IN ('MODIFIE', 'ABROGE', 'CITE', 'COMPLETE')),
+    commentaire TEXT
+);
